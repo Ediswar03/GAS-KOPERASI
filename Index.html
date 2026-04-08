@@ -492,7 +492,46 @@
       max-height: 90vh;
       overflow-y: auto;
       box-shadow: var(--shadow-lg);
+      border: 1px solid rgba(15, 23, 42, 0.08);
     }
+
+    .modal-close-button {
+      background: transparent;
+      border: none;
+      font-size: 1.4rem;
+      color: var(--text-muted);
+      cursor: pointer;
+      line-height: 1;
+      padding: 0;
+    }
+
+    .modal-close-button:hover {
+      color: var(--primary-dark);
+    }
+
+    .toast-container {
+      position: fixed;
+      right: 24px;
+      bottom: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      z-index: 3500;
+    }
+
+    .toast {
+      min-width: 260px;
+      padding: 14px 18px;
+      border-radius: 14px;
+      color: #ffffff;
+      box-shadow: var(--shadow-lg);
+      font-size: 0.95rem;
+      animation: fadeIn 0.25s ease-out;
+    }
+
+    .toast.success { background: #10b981; }
+    .toast.error { background: #ef4444; }
+    .toast.info { background: #3b82f6; }
 
     /* Chart Grid */
     .chart-grid {
@@ -796,7 +835,32 @@
               </div>
             </div>
           </div>
-          
+
+          <div id="modal-bayar-angsuran-container" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modal-bayar-angsuran-title">
+            <div class="modal-content">
+              <div style="display:flex; justify-content:space-between; align-items:center; gap: 16px; margin-bottom: 20px;">
+                <h2 id="modal-bayar-angsuran-title" style="margin:0; font-weight: 700; color: var(--primary-dark); font-size: 1.3rem;"><i class="fas fa-hand-holding-dollar"></i> Pembayaran Angsuran</h2>
+                <button type="button" class="modal-close-button" onclick="closeBayarAngsuranModal()" aria-label="Tutup modal">&times;</button>
+              </div>
+              <div style="display: grid; gap: 16px;">
+                <p id="modal-bayar-angsuran-info" style="color: var(--text-muted); font-size: 0.98rem; line-height: 1.5;"></p>
+                <div class="form-group">
+                  <label>Jumlah Cicilan yang Dibayar</label>
+                  <input type="number" id="modal-bayar-angsuran-input" class="form-control" min="0" step="1000" placeholder="Contoh: 300000">
+                </div>
+                <div id="modal-bayar-angsuran-error" style="display:none; color:#ef4444; font-size:0.9rem;">
+                  Silakan masukkan nominal pembayaran yang valid.
+                </div>
+                <div style="display:flex; justify-content:flex-end; gap: 12px; margin-top: 10px; flex-wrap: wrap;">
+                  <button class="btn-primary" style="background: #6b7280; box-shadow: none;" onclick="closeBayarAngsuranModal()">Batal</button>
+                  <button class="btn-primary" onclick="submitBayarAngsuran()">Bayar Sekarang</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="toast-container" id="toast-container"></div>
+
           <div class="card" style="overflow-x: auto;">
             <h2><i class="fas fa-list-alt"></i> Daftar Pinjaman Nasabah</h2>
             <table style="width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 0.95rem;">
@@ -1254,53 +1318,92 @@
       return date.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: '2-digit' });
     }
 
+    let currentBayarAngsuranId = null;
+
     function bayarAngsuran(id) {
       const pinjaman = dataPinjaman.find(p => p.id === id);
-      if(!pinjaman) return;
+      if (!pinjaman) return;
 
-      if(pinjaman.saldo <= 0) {
-        alert('Pinjaman ini sudah lunas!');
+      if (pinjaman.saldo <= 0) {
+        showToast('Pinjaman ini sudah lunas!', 'error');
         return;
       }
 
+      currentBayarAngsuranId = id;
       const angsuranPerTenor = (pinjaman.besar * 1.2) / (pinjaman.tenor || 1);
-      const input = prompt(
-        `Pembayaran Angsuran - ${pinjaman.nama}\n` +
-        `Sisa Saldo: ${formatRupiah(pinjaman.saldo)}\n` +
-        `Rekomendasi per ${pinjaman.sistemTenor || 'Angsuran'}: ${formatRupiah(angsuranPerTenor)}\n\n` +
-        `Masukkan jumlah cicilan yang dibayarkan:`,
-        angsuranPerTenor
-      );
-      
-      if(input !== null && !isNaN(input) && Number(input) > 0) {
-        const nominal = parseFloat(input);
-        if(nominal > pinjaman.saldo) {
-          alert('Pembayaran melebihi total sisa saldo pinjaman!');
-          return;
-        }
-        
-        // Update local data
-        pinjaman.saldo = pinjaman.saldo - nominal;
-        savePinjamanLocal();
-        renderDaftarPinjaman();
-        updateDashboard();
+      const infoText = `Nasabah: ${pinjaman.nama}\nSisa Saldo: ${formatRupiah(pinjaman.saldo)}\nRekomendasi per ${pinjaman.sistemTenor || 'Angsuran'}: ${formatRupiah(angsuranPerTenor)}`;
 
-        // Catat ke backend (Google Sheets)
-        google.script.run
-          .withSuccessHandler(res => {
-            console.log('Angsuran backend OK:', res);
-          })
-          .withFailureHandler(err => {
-            console.warn('Angsuran backend gagal (data lokal tetap tersimpan):', err);
-          })
-          .bayarAngsuranBackend(id, nominal);
+      document.getElementById('modal-bayar-angsuran-info').innerText = infoText;
+      document.getElementById('modal-bayar-angsuran-input').value = Math.min(angsuranPerTenor, pinjaman.saldo).toFixed(0);
+      document.getElementById('modal-bayar-angsuran-error').style.display = 'none';
+      document.getElementById('modal-bayar-angsuran-container').classList.remove('hidden');
+    }
 
-        if(pinjaman.saldo <= 0) {
-          alert('🎉 Selamat! Pinjaman atas nama ' + pinjaman.nama + ' telah LUNAS!');
-        } else {
-          alert(`Cicilan sebesar ${formatRupiah(nominal)} berhasil dibayarkan.\nSisa saldo: ${formatRupiah(pinjaman.saldo)}`);
-        }
+    function closeBayarAngsuranModal() {
+      document.getElementById('modal-bayar-angsuran-container').classList.add('hidden');
+      document.getElementById('modal-bayar-angsuran-error').style.display = 'none';
+      document.getElementById('modal-bayar-angsuran-input').value = '';
+      currentBayarAngsuranId = null;
+    }
+
+    function submitBayarAngsuran() {
+      const id = currentBayarAngsuranId;
+      if (!id) return;
+
+      const pinjaman = dataPinjaman.find(p => p.id === id);
+      if (!pinjaman) return;
+
+      const nominal = parseFloat(document.getElementById('modal-bayar-angsuran-input').value || 0);
+      if (isNaN(nominal) || nominal <= 0) {
+        const errEl = document.getElementById('modal-bayar-angsuran-error');
+        errEl.innerText = 'Masukkan jumlah cicilan yang valid.';
+        errEl.style.display = 'block';
+        return;
       }
+
+      if (nominal > pinjaman.saldo) {
+        const errEl = document.getElementById('modal-bayar-angsuran-error');
+        errEl.innerText = 'Jumlah pembayaran tidak boleh melebihi sisa saldo.';
+        errEl.style.display = 'block';
+        return;
+      }
+
+      pinjaman.saldo = Math.max(0, pinjaman.saldo - nominal);
+      savePinjamanLocal();
+      renderDaftarPinjaman();
+      updateDashboard();
+      closeBayarAngsuranModal();
+
+      google.script.run
+        .withSuccessHandler(res => {
+          console.log('Angsuran backend OK:', res);
+        })
+        .withFailureHandler(err => {
+          console.warn('Angsuran backend gagal (data lokal tetap tersimpan):', err);
+        })
+        .bayarAngsuranBackend(id, nominal);
+
+      if (pinjaman.saldo <= 0) {
+        showToast(`🎉 Pinjaman ${pinjaman.nama} telah LUNAS!`, 'success');
+      } else {
+        showToast(`Pembayaran ${formatRupiah(nominal)} berhasil. Sisa saldo ${formatRupiah(pinjaman.saldo)}.`, 'success');
+      }
+    }
+
+    function showToast(message, type = 'info') {
+      const container = document.getElementById('toast-container');
+      if (!container) return;
+
+      const toast = document.createElement('div');
+      toast.className = `toast ${type}`;
+      toast.innerText = message;
+      container.appendChild(toast);
+
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transition = 'opacity 0.3s ease';
+        setTimeout(() => toast.remove(), 300);
+      }, 4200);
     }
 
     function renderDaftarPinjaman() {
@@ -1351,7 +1454,7 @@
           <td style="padding: 12px; color: #ef4444; font-weight: 600;">${formatRupiah(p.saldo)}</td>
           <td style="padding: 12px; font-size: 0.85rem;">
             ${formatRupiah(angsuran)} / ${p.sistemTenor || 'Angsuran'} <br/>
-            <button onclick="bayarAngsuran(${p.id})" style="background: #10b981; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 0.75rem; margin-top: 4px;"><i class="fas fa-money-bill-wave"></i> Bayar</button>
+            <button onclick="bayarAngsuran('${p.id}')" style="background: #10b981; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 0.75rem; margin-top: 4px;"><i class="fas fa-money-bill-wave"></i> Bayar</button>
           </td>
           <td style="padding: 12px; text-align: center; white-space: nowrap;">
             <button onclick="editPinjaman(${p.id})" style="background: #3b82f6; color: white; border: none; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 0.8rem; margin-right: 4px;" title="Edit"><i class="fas fa-edit"></i></button>
